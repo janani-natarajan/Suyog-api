@@ -1,34 +1,28 @@
-# core_logic.py
 from google import genai
 import os
 from dotenv import load_dotenv
 
-# This tells Python to look specifically for 'secret.env' instead of the default '.env'
 load_dotenv("secret.env")
-
-# Now os.environ can find your key perfectly
 client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
 
-# In your core_logic.py file
-
-# In your core_logic.py file
-
-def process_suyog_data(user_input: str) -> dict:
+def process_suyog_data(user_input: str, csv_context: str) -> dict:
     try:
-        # UPDATED: Specialized for inclusive job searching
-        system_prompt = """
+        # The system prompt now incorporates the retrieved CSV data
+        system_prompt = f"""
         You are an empathetic and expert Job Finder Assistant dedicated to helping persons with disabilities 
         find inclusive and accessible job opportunities.
         
+        CRITICAL: Use the following database information to answer the user request:
+        ---
+        {csv_context}
+        ---
+        
         Guidelines:
-        1. When helping a user, ask about their specific qualifications, skills, and any specific accessibility 
-           requirements they need in a workplace.
-        2. Provide advice on identifying inclusive employers, companies with strong DE&I (Diversity, Equity, and Inclusion) 
-           policies, and roles that support remote or flexible work arrangements.
-        3. Use encouraging, respectful, and professional language.
-        4. Focus on matching the user's specific skills to potential roles. 
-        5. If the user mentions a specific disability or accessibility need, provide information on 
-           workplace accommodations and how to navigate those discussions professionally.
+        1. Only suggest jobs found in the provided database information above.
+        2. Ask about their specific qualifications, skills, and any specific accessibility requirements.
+        3. Provide advice on identifying inclusive employers.
+        4. If no relevant job is found in the database context, politely state that.
+        5. Maintain an encouraging, respectful, and professional tone.
         """
         
         full_prompt = f"{system_prompt}\nUser request: {user_input}"
@@ -43,7 +37,7 @@ def process_suyog_data(user_input: str) -> dict:
             "ai_response": response.text
         }
     except Exception as e:
-         return {
+        return {
             "status": "error",
             "ai_response": str(e)
         }
