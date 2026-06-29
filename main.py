@@ -1,3 +1,4 @@
+import os
 import smtplib
 from email.mime.text import MIMEText
 from fastapi import FastAPI
@@ -20,16 +21,18 @@ class ChatPayload(BaseModel):
 # ==========================================
 def send_otp_via_email(target_email: str, otp_code: str):
     # 1. Your Credentials
-    sender_email = "janarajan04@gmail.com" # <-- YOU MUST CHANGE THIS to your actual Gmail address!
-    app_password = "leve njaz bawo hfcq"
+    sender_email = "janarajan04@gmail.com" 
     
-    # 2. Build the Email
+    # 2. Securely fetch the password from Environment Variables
+    app_password = os.getenv("GMAIL_APP_PASSWORD")
+    
+    # 3. Build the Email
     msg = MIMEText(f"Welcome to Suyog+!\n\nYour verification code is: {otp_code}")
     msg['Subject'] = "Suyog+ Verification Code"
     msg['From'] = sender_email
     msg['To'] = target_email
     
-    # 3. Connect to Gmail and Send
+    # 4. Connect to Gmail and Send
     try:
         server = smtplib.SMTP('smtp.gmail.com', 587)
         server.starttls() # Secure the connection
