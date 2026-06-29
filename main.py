@@ -1,14 +1,21 @@
 import os
+import json
 import smtplib
 from email.mime.text import MIMEText
 from fastapi import FastAPI
 from pydantic import BaseModel
-import difflib
 import random
+
+# --- 1. NEW GEMINI IMPORTS & SETUP ---
+import google.generativeai as genai
+
+# Securely load the API key from environment variables
+gemini_key = os.getenv("GEMINI_API_KEY")
+if gemini_key:
+    genai.configure(api_key=gemini_key)
 
 app = FastAPI()
 
-# In-memory dictionary to temporarily store OTPs (e.g., {"janani@example.com": "5821"})
 OTP_STORE = {}
 
 class ChatPayload(BaseModel):
@@ -16,26 +23,18 @@ class ChatPayload(BaseModel):
     email: str
     current_step: str
 
-# ==========================================
-# GMAIL SMTP FUNCTION
-# ==========================================
 def send_otp_via_email(target_email: str, otp_code: str):
-    # 1. Your Credentials
     sender_email = "janarajan04@gmail.com" 
-    
-    # 2. Securely fetch the password from Environment Variables
     app_password = os.getenv("GMAIL_APP_PASSWORD")
     
-    # 3. Build the Email
     msg = MIMEText(f"Welcome to Suyog+!\n\nYour verification code is: {otp_code}")
     msg['Subject'] = "Suyog+ Verification Code"
     msg['From'] = sender_email
     msg['To'] = target_email
     
-    # 4. Connect to Gmail and Send
     try:
         server = smtplib.SMTP('smtp.gmail.com', 587)
-        server.starttls() # Secure the connection
+        server.starttls() 
         server.login(sender_email, app_password)
         server.send_message(msg)
         server.quit()
@@ -43,75 +42,101 @@ def send_otp_via_email(target_email: str, otp_code: str):
     except Exception as e:
         print(f"DEBUG: Failed to send email. Error: {e}")
 
+# --- 2. NEW GEMINI HELPER FUNCTION ---
+def extract_info_with_gemini(text: str):
+    """Uses Gemini to extract the name and department from a natural sentence."""
+    try:
+        # Use the fast and lightweight flash model
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        
+        # Strict instructions so Gemini only returns code we can use
+        prompt = f"""
+        Extract the user's name and their preferred department from this text: "{text}"
+        The department must be one of these exactly: Administration, IT, HR, Finance.
+        Return ONLY a raw JSON object in this exact format: {{"name": "extracted_name", "department": "extracted_department"}}
+        If you cannot find a valid department, use "Unknown".
+        Do not use markdown formatting.
+        """
+        
+        response = model.generate_content(prompt)
+        
+        # Clean up the text and turn it into a Python dictionary
+        cleaned_text = response.text.replace('```json', '').replace('```', '').strip()
+        return json.loads(cleaned_text)
+        
+    except Exception as e:
+        print(f"Gemini Error: {e}")
+        return {"name": "User", "department": "Unknown"}
 
 @app.post("/api/chat")
 async def chat_endpoint(payload: ChatPayload):
-    msg = payload.user_message.strip().lower()
+    # We keep the original case for Gemini to extract names properly, 
+    # but use lowercase for simple matching later.
+    msg_original = payload.user_message.strip()
+    msg_lower = msg_original.lower()
+    
     email = payload.email.strip().lower()
     step = payload.current_step
 
     # -----------------------------------------
-    # STEP A1: Login (get_email)
+    # STEP A1: Login
     # -----------------------------------------
     if step == "get_email":
-        if "@" in msg and "." in msg:
-            # 1. Generate a random 4-digit OTP
+        if "@" in msg_lower and "." in msg_lower:
             generated_otp = str(random.randint(1000, 9999))
-            
-            # 2. Save it in our temporary dictionary linked to their email
             OTP_STORE[email] = generated_otp 
-            
-            # 3. Call your custom API function to send the email
             send_otp_via_email(email, generated_otp)
-            
             return {
                 "status": "success",
                 "ai_response": f"We've sent a verification code to {email}. Please check your inbox and enter the 4-digit code.",
                 "next_step": "verify_code"
             }
         else:
-            return {
-                "status": "error",
-                "ai_response": "Please enter a valid email address.",
-                "next_step": "get_email"
-            }
+            return {"status": "error", "ai_response": "Please enter a valid email address.", "next_step": "get_email"}
 
     # -----------------------------------------
-    # STEP A2: Verify OTP (verify_code)
+    # STEP A2: Verify OTP
     # -----------------------------------------
     elif step == "verify_code":
-        # Look up the OTP we saved for this specific email
         saved_otp = OTP_STORE.get(email)
-        
-        if saved_otp and msg == saved_otp: 
-            # Success! Delete the OTP from memory so it can't be reused
+        if saved_otp and msg_lower == saved_otp: 
             del OTP_STORE[email] 
-            
             return {
                 "status": "success",
-                "ai_response": "Login successful! Please introduce yourself (e.g., 'I'm Janani and I love Administration').",
+                "ai_response": "Login successful! Please introduce yourself (e.g., 'I am Janani and I love Administration').",
                 "next_step": "get_intro"
             }
         else:
+            return {"status": "error", "ai_response": "Incorrect code. Please try again.", "next_step": "verify_code"}
+
+    # -----------------------------------------
+    # STEP B: The Brain (get_intro) - UPGRADED
+    # -----------------------------------------
+    elif step == "get_intro":
+        # 1. Ask Gemini to read the user's mind!
+        extracted_data = extract_info_with_gemini(msg_original)
+        user_name = extracted_data.get("name", "there")
+        user_dept = extracted_data.get("department", "Unknown")
+        
+        UNIQUE_DEPTS = ["administration", "it", "hr", "finance"] 
+        
+        # 2. Check if Gemini found a valid department
+        if user_dept.lower() in UNIQUE_DEPTS:
+            return {
+                "status": "success",
+                "ai_response": f"Nice to meet you, {user_name}! I see you are interested in {user_dept.capitalize()}. What is your highest educational qualification?",
+                "next_step": "get_qualification"
+            }
+        else:
+            # If they just said "Hi I am Janani", ask them to clarify the department
             return {
                 "status": "error",
-                "ai_response": "Incorrect code. Please try again.",
-                "next_step": "verify_code"
+                "ai_response": f"Nice to meet you, {user_name}! I didn't quite catch your preferred field. Please choose from: Administration, IT, HR, or Finance.",
+                "next_step": "get_intro" # Keep them on this step
             }
 
     # -----------------------------------------
-    # STEP B: The Brain (get_intro)
-    # -----------------------------------------
-    elif step == "get_intro":
-        UNIQUE_DEPTS = ["administration", "it", "hr", "finance"] 
-        return {
-            "status": "success",
-            "ai_response": "Nice to meet you! You selected Administration. What is your highest educational qualification?",
-            "next_step": "get_qualification"
-        }
-
-    # -----------------------------------------
-    # STEP C: Qualification (get_qualification)
+    # STEP C: Qualification 
     # -----------------------------------------
     elif step == "get_qualification":
         return {
@@ -121,10 +146,10 @@ async def chat_endpoint(payload: ChatPayload):
         }
 
     # -----------------------------------------
-    # STEP D: Disability & Sub-category (get_disability)
+    # STEP D: Disability & Sub-category
     # -----------------------------------------
     elif step == "get_disability":
-        if "intellectual" in msg:
+        if "intellectual" in msg_lower:
             return {
                 "status": "success",
                 "ai_response": "Since you selected Intellectual, could you specify the sub-category? (e.g., Autism, Dyslexia, Down Syndrome)",
@@ -138,7 +163,7 @@ async def chat_endpoint(payload: ChatPayload):
             }
 
     # -----------------------------------------
-    # STEP D2: Intellectual Sub-category (get_intellectual_sub)
+    # STEP D2: Intellectual Sub-category
     # -----------------------------------------
     elif step == "get_intellectual_sub":
         return {
@@ -148,7 +173,7 @@ async def chat_endpoint(payload: ChatPayload):
         }
 
     # -----------------------------------------
-    # STEP E: Saving & Searching (get_functional)
+    # STEP E: Saving & Searching (We will build this next!)
     # -----------------------------------------
     elif step == "get_functional":
         markdown_jobs = "### Top 3 Jobs\n1. Admin Assistant...\n2. Data Entry...\n3. Receptionist..."
