@@ -5,9 +5,8 @@ from email.mime.text import MIMEText
 from fastapi import FastAPI
 from pydantic import BaseModel
 import random
-import csv # --- NEW: Import CSV module ---
+import csv
 
-# --- 1. NEW GEMINI IMPORTS & SETUP ---
 import google.generativeai as genai
 
 # Securely load the API key from environment variables
@@ -18,7 +17,7 @@ if gemini_key:
 app = FastAPI()
 
 OTP_STORE = {}
-USER_SESSIONS = {} # --- NEW: Short-term memory for active chats ---
+USER_SESSIONS = {} 
 
 class ChatPayload(BaseModel):
     user_message: str
@@ -44,106 +43,125 @@ def send_otp_via_email(target_email: str, otp_code: str):
     except Exception as e:
         print(f"DEBUG: Failed to send email. Error: {e}")
 
-# --- 2. NEW GEMINI HELPER FUNCTION ---
 def extract_info_with_gemini(text: str):
     """Uses Gemini to extract the name and department from a natural sentence."""
     try:
-        # Use the fast and lightweight flash model
         model = genai.GenerativeModel('gemini-1.5-flash')
-        
-        # Strict instructions so Gemini only returns code we can use
         prompt = f"""
         Extract the user's name and their preferred department from this text: "{text}"
-        The department must be one of these exactly: Administration, IT, HR, Finance.
+        The department must be one of these exactly: Administration, IT, HR, Finance, Accounts, Postal.
         Return ONLY a raw JSON object in this exact format: {{"name": "extracted_name", "department": "extracted_department"}}
         If you cannot find a valid department, use "Unknown".
         Do not use markdown formatting.
         """
-        
         response = model.generate_content(prompt)
-        
-        # Clean up the text and turn it into a Python dictionary
         cleaned_text = response.text.replace('```json', '').replace('```', '').strip()
         return json.loads(cleaned_text)
-        
     except Exception as e:
         print(f"Gemini Error: {e}")
         return {"name": "User", "department": "Unknown"}
 
+# --- 3. NEW DATABASE MATCHING ENGINE ---
+def find_top_jobs(user_profile: dict):
+    """Scans jobs.csv and scores matches based on department and disability."""
+    user_dept = user_profile.get("Department", "").lower()
+    primary_disability = user_profile.get("Primary Disability", "").lower()
+    sub_category = user_profile.get("Sub-Category", "").lower()
+    
+    scored_jobs = []
+    
+    try:
+        # Open your uploaded jobs.csv
+        with open('jobs.csv', mode='r', encoding='utf-8') as file:
+            reader = csv.DictReader(file)
+            for row in reader:
+                score = 0
+                job_dept = row.get("Department", "").lower()
+                job_title = row.get("Designation", "").lower()
+                
+                # Point system for Department
+                if user_dept and (user_dept in job_dept or user_dept in job_title):
+                    score += 5
+                    
+                # Combine all disability columns to search them at once
+                disability_text = " ".join([
+                    row.get("Category of Disabilities - A", ""),
+                    row.get("Category of Disabilities - B", ""),
+                    row.get("Category of Disabilities - C", ""),
+                    row.get("Category of Disabilities - D", ""),
+                    row.get("Category of Disabilities - E", "")
+                ]).lower()
+                
+                # Point system for Accommodations
+                if primary_disability and primary_disability in disability_text:
+                    score += 10
+                if sub_category != "n/a" and sub_category in disability_text:
+                    score += 10
+                
+                # Add to list even if score is 0, so we always have fallbacks
+                scored_jobs.append({
+                    "score": score,
+                    "title": row.get("Designation", "Unknown Job").strip(),
+                    "department": row.get("Department", "Various").strip()
+                })
+                
+    except Exception as e:
+        print(f"Error reading jobs.csv: {e}")
+        return "### Top 3 Jobs\n1. Admin Assistant\n2. Data Entry Clerk\n3. Front Desk Receptionist"
+
+    # Sort the jobs from highest score to lowest
+    scored_jobs.sort(key=lambda x: x["score"], reverse=True)
+    
+    # Grab the top 3 and format them into Markdown for the Android App
+    top_3 = scored_jobs[:3]
+    markdown_output = "### Your Top Matches:\n\n"
+    for i, job in enumerate(top_3, 1):
+        markdown_output += f"**{i}. {job['title']}**\n*Department: {job['department']}*\n\n"
+        
+    return markdown_output
+
+
 @app.post("/api/chat")
 async def chat_endpoint(payload: ChatPayload):
-    # We keep the original case for Gemini to extract names properly, 
-    # but use lowercase for simple matching later.
     msg_original = payload.user_message.strip()
     msg_lower = msg_original.lower()
-    
     email = payload.email.strip().lower()
     step = payload.current_step
 
     # -----------------------------------------
-    # STEP A1: Login
+    # STEP A1 & A2: Login & Verification
     # -----------------------------------------
     if step == "get_email":
         if "@" in msg_lower and "." in msg_lower:
             generated_otp = str(random.randint(1000, 9999))
             OTP_STORE[email] = generated_otp 
             send_otp_via_email(email, generated_otp)
-            return {
-                "status": "success",
-                "ai_response": f"We've sent a verification code to {email}. Please check your inbox and enter the 4-digit code.",
-                "next_step": "verify_code"
-            }
-        else:
-            return {"status": "error", "ai_response": "Please enter a valid email address.", "next_step": "get_email"}
+            return {"status": "success", "ai_response": f"We've sent a verification code to {email}. Please check your inbox.", "next_step": "verify_code"}
+        return {"status": "error", "ai_response": "Please enter a valid email address.", "next_step": "get_email"}
 
-    # -----------------------------------------
-    # STEP A2: Verify OTP
-    # -----------------------------------------
     elif step == "verify_code":
         saved_otp = OTP_STORE.get(email)
         if saved_otp and msg_lower == saved_otp: 
             del OTP_STORE[email] 
-            return {
-                "status": "success",
-                "ai_response": "Login successful! Please introduce yourself (e.g., 'I am Janani and I love Administration').",
-                "next_step": "get_intro"
-            }
-        else:
-            return {"status": "error", "ai_response": "Incorrect code. Please try again.", "next_step": "verify_code"}
+            return {"status": "success", "ai_response": "Login successful! Please introduce yourself (e.g., 'I am Janani and I love Administration').", "next_step": "get_intro"}
+        return {"status": "error", "ai_response": "Incorrect code. Please try again.", "next_step": "verify_code"}
 
     # -----------------------------------------
-    # STEP B: The Brain (get_intro) - UPGRADED
+    # STEP B: The Brain (get_intro)
     # -----------------------------------------
     elif step == "get_intro":
-        # 1. Ask Gemini to read the user's mind!
         extracted_data = extract_info_with_gemini(msg_original)
         user_name = extracted_data.get("name", "there")
         user_dept = extracted_data.get("department", "Unknown")
         
-        UNIQUE_DEPTS = ["administration", "it", "hr", "finance"] 
+        # Added a few more departments based on your CSV sample!
+        UNIQUE_DEPTS = ["administration", "it", "hr", "finance", "accounts", "postal"] 
         
-        # 2. Check if Gemini found a valid department
         if user_dept.lower() in UNIQUE_DEPTS:
-            
-            # --- START MEMORY TRACKING ---
-            USER_SESSIONS[email] = {
-                "Email": email,
-                "Name": user_name,
-                "Department": user_dept.capitalize()
-            }
-            
-            return {
-                "status": "success",
-                "ai_response": f"Nice to meet you, {user_name}! I see you are interested in {user_dept.capitalize()}. What is your highest educational qualification?",
-                "next_step": "get_qualification"
-            }
+            USER_SESSIONS[email] = {"Email": email, "Name": user_name, "Department": user_dept.capitalize()}
+            return {"status": "success", "ai_response": f"Nice to meet you, {user_name}! I see you are interested in {user_dept.capitalize()}. What is your highest educational qualification?", "next_step": "get_qualification"}
         else:
-            # If they just said "Hi I am Janani", ask them to clarify the department
-            return {
-                "status": "error",
-                "ai_response": f"Nice to meet you, {user_name}! I didn't quite catch your preferred field. Please choose from: Administration, IT, HR, or Finance.",
-                "next_step": "get_intro" 
-            }
+            return {"status": "error", "ai_response": f"Nice to meet you, {user_name}! I didn't quite catch your preferred field. Please choose from: Administration, IT, HR, Finance, Accounts, or Postal.", "next_step": "get_intro" }
 
     # -----------------------------------------
     # STEP C: Qualification 
@@ -151,12 +169,7 @@ async def chat_endpoint(payload: ChatPayload):
     elif step == "get_qualification":
         if email not in USER_SESSIONS: USER_SESSIONS[email] = {}
         USER_SESSIONS[email]["Qualification"] = msg_original
-        
-        return {
-            "status": "success",
-            "ai_response": "Got it. What is your primary disability? (e.g., Visual, Physical, Intellectual, Hearing)",
-            "next_step": "get_disability"
-        }
+        return {"status": "success", "ai_response": "Got it. What is your primary disability? (e.g., Visual, Physical, Intellectual, Hearing)", "next_step": "get_disability"}
 
     # -----------------------------------------
     # STEP D: Disability & Sub-category
@@ -166,34 +179,18 @@ async def chat_endpoint(payload: ChatPayload):
         USER_SESSIONS[email]["Primary Disability"] = msg_original
         
         if "intellectual" in msg_lower:
-            return {
-                "status": "success",
-                "ai_response": "Since you selected Intellectual, could you specify the sub-category? (e.g., Autism, Dyslexia, Down Syndrome)",
-                "next_step": "get_intellectual_sub"
-            }
+            return {"status": "success", "ai_response": "Since you selected Intellectual, could you specify the sub-category? (e.g., Autism, Dyslexia, Down Syndrome)", "next_step": "get_intellectual_sub"}
         else:
             USER_SESSIONS[email]["Sub-Category"] = "N/A"
-            return {
-                "status": "success",
-                "ai_response": "Thank you. Now, what are your functional strengths?",
-                "next_step": "get_functional"
-            }
+            return {"status": "success", "ai_response": "Thank you. Now, what are your functional strengths?", "next_step": "get_functional"}
 
-    # -----------------------------------------
-    # STEP D2: Intellectual Sub-category
-    # -----------------------------------------
     elif step == "get_intellectual_sub":
         if email not in USER_SESSIONS: USER_SESSIONS[email] = {}
         USER_SESSIONS[email]["Sub-Category"] = msg_original
-        
-        return {
-            "status": "success",
-            "ai_response": "Thank you. Now, what are your functional strengths?",
-            "next_step": "get_functional"
-        }
+        return {"status": "success", "ai_response": "Thank you. Now, what are your functional strengths?", "next_step": "get_functional"}
 
     # -----------------------------------------
-    # STEP E: Saving & Searching
+    # STEP E: Saving & Searching 
     # -----------------------------------------
     elif step == "get_functional":
         if email not in USER_SESSIONS: USER_SESSIONS[email] = {}
@@ -208,14 +205,11 @@ async def chat_endpoint(payload: ChatPayload):
             writer = csv.DictWriter(file, fieldnames=fieldnames)
             if not file_exists:
                 writer.writeheader()
-            
-            # Use dictionary comprehension to ensure we only write keys that exist in fieldnames
             clean_profile = {k: user_profile.get(k, "N/A") for k in fieldnames}
             writer.writerow(clean_profile)
 
-        # 2. MATCH WITH jobs.csv (Placeholder logic for now)
-        # TODO: Search jobs.csv
-        markdown_jobs = "### Top Matches Retrieved\n1. Admin Assistant\n2. Data Entry Clerk\n3. Front Desk Receptionist"
+        # 2. TRIGGER THE MATCHING ENGINE
+        markdown_jobs = find_top_jobs(user_profile)
         
         # 3. CLEAR SHORT-TERM MEMORY
         if email in USER_SESSIONS:
@@ -223,7 +217,7 @@ async def chat_endpoint(payload: ChatPayload):
             
         return {
             "status": "success",
-            "ai_response": f"Profile saved successfully! Here are your matches:\n{markdown_jobs}",
+            "ai_response": f"Profile saved successfully! {markdown_jobs}",
             "next_step": "finished" 
         }
 
