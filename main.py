@@ -28,6 +28,7 @@ def send_otp_via_email(target_email: str, otp_code: str):
     app_password = os.getenv("GMAIL_APP_PASSWORD")
     if not app_password:
         print("CRITICAL: GMAIL_APP_PASSWORD not set")
+        print(f"FALLBACK OTP for {target_email} is: {otp_code}")
         return
     
     msg = MIMEText(f"Welcome to Suyog+!\n\nYour verification code is: {otp_code}")
@@ -35,14 +36,18 @@ def send_otp_via_email(target_email: str, otp_code: str):
     msg['From'] = sender_email
     msg['To'] = target_email
     try:
-        # UPDATED: Added timeout=60 to prevent the server from freezing indefinitely 
-        server = smtplib.SMTP('smtp.gmail.com', 587, timeout=60)
-        server.starttls() 
+        # ATTEMPT 1: Use Port 465 and SMTP_SSL to bypass Render's Port 587 block
+        server = smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=15)
         server.login(sender_email, app_password)
         server.send_message(msg)
         server.quit()
+        print(f"DEBUG: Email successfully sent to {target_email}")
     except Exception as e:
+        # ATTEMPT 2: If the firewall still blocks it, print the OTP to the logs so you aren't stuck!
         print(f"Email Error: {e}")
+        print("=====================================================")
+        print(f"SECURITY BYPASS: The OTP for {target_email} is: {otp_code}")
+        print("=====================================================")
 
 def find_top_jobs(user_profile: dict):
     user_dept = user_profile.get("Department", "").lower()
@@ -123,7 +128,4 @@ async def chat_endpoint(payload: ChatPayload):
             writer.writerow(clean_profile)
         
         response_text = find_top_jobs(profile)
-        USER_SESSIONS.pop(email, None)
-        return {"status": "success", "ai_response": response_text, "next_step": "finished"}
-
-    return {"status": "error", "ai_response": "I'm lost.", "next_step": "get_email"}
+        USER_S
