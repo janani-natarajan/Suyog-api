@@ -119,6 +119,9 @@ async def chat_endpoint(payload: ChatPayload):
             if f.tell() == 0: writer.writeheader()
             writer.writerow(profile)
             
-        return {"status": "success", "ai_response": find_top_jobs(profile), "next_step": "finished"}
+        response_text = find_top_jobs(profile)
+        if email in USER_SESSIONS: del USER_SESSIONS[email]
+            
+        return {"status": "success", "ai_response": response_text, "next_step": "finished"}
 
     return {"status": "error", "ai_response": "I'm lost.", "next_step": "get_email"}
