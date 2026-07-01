@@ -2,21 +2,21 @@ import os
 import json
 import smtplib
 from email.mime.text import MIMEText
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import random
 import csv
 import google.generativeai as genai
 
-# Setup Gemini
+# Setup
 gemini_key = os.getenv("GEMINI_API_KEY")
 if gemini_key:
     genai.configure(api_key=gemini_key)
 
 app = FastAPI()
-
 OTP_STORE = {}
 USER_SESSIONS = {} 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 class ChatPayload(BaseModel):
     user_message: str
@@ -26,6 +26,10 @@ class ChatPayload(BaseModel):
 def send_otp_via_email(target_email: str, otp_code: str):
     sender_email = "janarajan04@gmail.com" 
     app_password = os.getenv("GMAIL_APP_PASSWORD")
+    if not app_password:
+        print("CRITICAL: GMAIL_APP_PASSWORD not set")
+        return
+    
     msg = MIMEText(f"Welcome to Suyog+!\n\nYour verification code is: {otp_code}")
     msg['Subject'] = "Suyog+ Verification Code"
     msg['From'] = sender_email
@@ -39,37 +43,24 @@ def send_otp_via_email(target_email: str, otp_code: str):
     except Exception as e:
         print(f"Email Error: {e}")
 
-def extract_info_with_gemini(text: str):
-    try:
-        model = genai.GenerativeModel('gemini-1.5-flash')
-        prompt = f"""
-        Extract the user's name and department from: "{text}"
-        Departments: Administration, IT, HR, Finance, Accounts, Postal.
-        Return ONLY JSON: {{"name": "...", "department": "..."}}
-        """
-        response = model.generate_content(prompt)
-        return json.loads(response.text.replace('```json', '').replace('```', '').strip())
-    except:
-        return {"name": "User", "department": "Unknown"}
-
 def find_top_jobs(user_profile: dict):
     user_dept = user_profile.get("Department", "").lower()
     disability = user_profile.get("Primary Disability", "").lower()
-    
     scored_jobs = []
+    
+    csv_path = os.path.join(BASE_DIR, 'jobs.csv')
     try:
-        with open('jobs.csv', mode='r', encoding='utf-8') as file:
+        with open(csv_path, mode='r', encoding='utf-8') as file:
             reader = csv.DictReader(file)
             for row in reader:
                 score = 0
                 if user_dept in row.get("Department", "").lower(): score += 5
-                
-                # Check disability columns A through E
                 disability_text = " ".join([row.get(f"Category of Disabilities - {col}", "") for col in "ABCDE"]).lower()
                 if disability in disability_text: score += 10
-                
                 scored_jobs.append({"score": score, "title": row.get("Designation", "Job"), "dept": row.get("Department", "")})
-    except: pass
+    except Exception as e:
+        print(f"CSV Read Error: {e}")
+        return "### Top Matches\n1. Admin Assistant\n2. Data Entry Clerk"
     
     scored_jobs.sort(key=lambda x: x["score"], reverse=True)
     out = "### Your Top Matches:\n\n"
@@ -80,7 +71,6 @@ def find_top_jobs(user_profile: dict):
 @app.post("/api/chat")
 async def chat_endpoint(payload: ChatPayload):
     msg_orig = payload.user_message.strip()
-    msg_low = msg_orig.lower()
     email = payload.email.strip().lower()
     step = payload.current_step
 
@@ -91,17 +81,23 @@ async def chat_endpoint(payload: ChatPayload):
         return {"status": "success", "ai_response": "Code sent! Check your email.", "next_step": "verify_code"}
 
     elif step == "verify_code":
-        if OTP_STORE.get(email) == msg_low:
+        if OTP_STORE.get(email) == msg_orig.lower():
             del OTP_STORE[email]
             return {"status": "success", "ai_response": "Login success! Introduce yourself (Name & Dept).", "next_step": "get_intro"}
         return {"status": "error", "ai_response": "Wrong code.", "next_step": "verify_code"}
 
     elif step == "get_intro":
-        data = extract_info_with_gemini(msg_orig)
-        USER_SESSIONS[email] = {"Email": email, "Name": data["name"], "Department": data["department"]}
-        return {"status": "success", "ai_response": f"Hi {data['name']}! Interest in {data['department']} noted. Qualification?", "next_step": "get_qualification"}
+        try:
+            model = genai.GenerativeModel('gemini-1.5-flash')
+            response = model.generate_content(f"Extract Name and Dept from: '{msg_orig}'. Return JSON: {{\"name\": \"...\", \"department\": \"...\"}}")
+            data = json.loads(response.text.replace('```json', '').replace('```', '').strip())
+            USER_SESSIONS[email] = {"Email": email, "Name": data["name"], "Department": data["department"]}
+            return {"status": "success", "ai_response": f"Hi {data['name']}! Interest in {data['department']} noted. Qualification?", "next_step": "get_qualification"}
+        except:
+            return {"status": "error", "ai_response": "Could not parse intro. Please state your Name and Department.", "next_step": "get_intro"}
 
     elif step == "get_qualification":
+        if email not in USER_SESSIONS: return {"status": "error", "ai_response": "Session expired.", "next_step": "get_email"}
         USER_SESSIONS[email]["Qualification"] = msg_orig
         return {"status": "success", "ai_response": "Disability type?", "next_step": "get_disability"}
 
@@ -110,18 +106,16 @@ async def chat_endpoint(payload: ChatPayload):
         return {"status": "success", "ai_response": "Functional strengths?", "next_step": "get_functional"}
 
     elif step == "get_functional":
-        profile = USER_SESSIONS[email]
+        profile = USER_SESSIONS.get(email, {})
         profile["Functional Strengths"] = msg_orig
-        
-        # Save to CSV
-        with open('user_database.csv', 'a', newline='') as f:
+        csv_path = os.path.join(BASE_DIR, 'user_database.csv')
+        with open(csv_path, 'a', newline='') as f:
             writer = csv.DictWriter(f, fieldnames=["Email", "Name", "Department", "Qualification", "Primary Disability", "Functional Strengths"])
-            if f.tell() == 0: writer.writeheader()
+            if os.stat(csv_path).st_size == 0: writer.writeheader()
             writer.writerow(profile)
-            
+        
         response_text = find_top_jobs(profile)
-        if email in USER_SESSIONS: del USER_SESSIONS[email]
-            
+        USER_SESSIONS.pop(email, None)
         return {"status": "success", "ai_response": response_text, "next_step": "finished"}
 
     return {"status": "error", "ai_response": "I'm lost.", "next_step": "get_email"}
