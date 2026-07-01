@@ -72,7 +72,6 @@ def find_top_jobs(user_profile: dict):
         out += f"**{i}. {job['title']}**\n*Dept: {job['dept']}*\n\n"
     return out
 
-# CRITICAL FIX: Removed 'async' from this line!
 @app.post("/api/chat")
 def chat_endpoint(payload: ChatPayload):
     msg_orig = payload.user_message.strip()
@@ -92,16 +91,19 @@ def chat_endpoint(payload: ChatPayload):
         return {"status": "error", "ai_response": "Wrong code.", "next_step": "verify_code"}
 
     elif step == "get_intro":
-        try:
-            model = genai.GenerativeModel('gemini-1.5-flash')
-            response = model.generate_content(f"Extract Name and Dept from: '{msg_orig}'. Return JSON: {{\"name\": \"...\", \"department\": \"...\"}}")
-            data = json.loads(response.text.replace('```json', '').replace('```', '').strip())
-            USER_SESSIONS[email] = {"Email": email, "Name": data["name"], "Department": data["department"]}
-            return {"status": "success", "ai_response": f"Hi {data['name']}! Interest in {data['department']} noted. Qualification?", "next_step": "get_qualification"}
-        except Exception as e:
-            # CRITICAL FIX: Print the exact Gemini error to the Render logs!
-            print(f"CRITICAL GEMINI ERROR: {e}")
-            return {"status": "error", "ai_response": "Could not parse intro. Please state your Name and Department.", "next_step": "get_intro"}
+        # ---------------------------------------------------------
+        # DUMMY BRAIN TEST: Bypassing Gemini to isolate the error
+        # ---------------------------------------------------------
+        print(f"DEBUG: Reached get_intro step for {email}")
+        
+        # Hardcoding the user session data for this test
+        USER_SESSIONS[email] = {"Email": email, "Name": "TestUser", "Department": "Administration"}
+        
+        return {
+            "status": "success", 
+            "ai_response": "AI Bypass successful! What is your qualification?", 
+            "next_step": "get_qualification"
+        }
 
     elif step == "get_qualification":
         if email not in USER_SESSIONS: return {"status": "error", "ai_response": "Session expired.", "next_step": "get_email"}
