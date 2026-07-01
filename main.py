@@ -35,7 +35,8 @@ def send_otp_via_email(target_email: str, otp_code: str):
     msg['From'] = sender_email
     msg['To'] = target_email
     try:
-        server = smtplib.SMTP('smtp.gmail.com', 587)
+        # UPDATED: Added timeout=60 to prevent the server from freezing indefinitely 
+        server = smtplib.SMTP('smtp.gmail.com', 587, timeout=60)
         server.starttls() 
         server.login(sender_email, app_password)
         server.send_message(msg)
@@ -107,12 +108,19 @@ async def chat_endpoint(payload: ChatPayload):
 
     elif step == "get_functional":
         profile = USER_SESSIONS.get(email, {})
+        profile = {k: str(v) for k, v in profile.items()} # Ensure all values are strings for CSV
         profile["Functional Strengths"] = msg_orig
         csv_path = os.path.join(BASE_DIR, 'user_database.csv')
-        with open(csv_path, 'a', newline='') as f:
+        
+        file_exists = os.path.isfile(csv_path) and os.stat(csv_path).st_size > 0
+        with open(csv_path, 'a', newline='', encoding='utf-8') as f:
             writer = csv.DictWriter(f, fieldnames=["Email", "Name", "Department", "Qualification", "Primary Disability", "Functional Strengths"])
-            if os.stat(csv_path).st_size == 0: writer.writeheader()
-            writer.writerow(profile)
+            if not file_exists: 
+                writer.writeheader()
+            
+            # Write only the keys that exist in the fieldnames
+            clean_profile = {k: profile.get(k, "N/A") for k in ["Email", "Name", "Department", "Qualification", "Primary Disability", "Functional Strengths"]}
+            writer.writerow(clean_profile)
         
         response_text = find_top_jobs(profile)
         USER_SESSIONS.pop(email, None)
