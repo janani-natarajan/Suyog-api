@@ -36,14 +36,12 @@ def send_otp_via_email(target_email: str, otp_code: str):
     msg['From'] = sender_email
     msg['To'] = target_email
     try:
-        # ATTEMPT 1: Use Port 465 and SMTP_SSL to bypass Render's Port 587 block
         server = smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=15)
         server.login(sender_email, app_password)
         server.send_message(msg)
         server.quit()
         print(f"DEBUG: Email successfully sent to {target_email}")
     except Exception as e:
-        # ATTEMPT 2: If the firewall still blocks it, print the OTP to the logs so you aren't stuck!
         print(f"Email Error: {e}")
         print("=====================================================")
         print(f"SECURITY BYPASS: The OTP for {target_email} is: {otp_code}")
@@ -74,8 +72,9 @@ def find_top_jobs(user_profile: dict):
         out += f"**{i}. {job['title']}**\n*Dept: {job['dept']}*\n\n"
     return out
 
+# CRITICAL FIX: Removed 'async' from this line!
 @app.post("/api/chat")
-async def chat_endpoint(payload: ChatPayload):
+def chat_endpoint(payload: ChatPayload):
     msg_orig = payload.user_message.strip()
     email = payload.email.strip().lower()
     step = payload.current_step
@@ -99,7 +98,9 @@ async def chat_endpoint(payload: ChatPayload):
             data = json.loads(response.text.replace('```json', '').replace('```', '').strip())
             USER_SESSIONS[email] = {"Email": email, "Name": data["name"], "Department": data["department"]}
             return {"status": "success", "ai_response": f"Hi {data['name']}! Interest in {data['department']} noted. Qualification?", "next_step": "get_qualification"}
-        except:
+        except Exception as e:
+            # CRITICAL FIX: Print the exact Gemini error to the Render logs!
+            print(f"CRITICAL GEMINI ERROR: {e}")
             return {"status": "error", "ai_response": "Could not parse intro. Please state your Name and Department.", "next_step": "get_intro"}
 
     elif step == "get_qualification":
@@ -113,7 +114,7 @@ async def chat_endpoint(payload: ChatPayload):
 
     elif step == "get_functional":
         profile = USER_SESSIONS.get(email, {})
-        profile = {k: str(v) for k, v in profile.items()} # Ensure all values are strings for CSV
+        profile = {k: str(v) for k, v in profile.items()} 
         profile["Functional Strengths"] = msg_orig
         csv_path = os.path.join(BASE_DIR, 'user_database.csv')
         
@@ -122,10 +123,11 @@ async def chat_endpoint(payload: ChatPayload):
             writer = csv.DictWriter(f, fieldnames=["Email", "Name", "Department", "Qualification", "Primary Disability", "Functional Strengths"])
             if not file_exists: 
                 writer.writeheader()
-            
-            # Write only the keys that exist in the fieldnames
             clean_profile = {k: profile.get(k, "N/A") for k in ["Email", "Name", "Department", "Qualification", "Primary Disability", "Functional Strengths"]}
             writer.writerow(clean_profile)
         
         response_text = find_top_jobs(profile)
-        USER_S
+        USER_SESSIONS.pop(email, None)
+        return {"status": "success", "ai_response": response_text, "next_step": "finished"}
+
+    return {"status": "error", "ai_response": "I'm lost.", "next_step": "get_email"}
