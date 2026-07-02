@@ -5,7 +5,7 @@ import random
 from email.mime.text import MIMEText
 from fastapi import FastAPI
 from pydantic import BaseModel
-import csvfrom google.oauth2 
+import csv from google.oauth2 
 import service_account
 import google.generativeai as genai
 
