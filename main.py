@@ -1,5 +1,6 @@
 import os
 import json
+import re
 from fastapi import FastAPI
 from pydantic import BaseModel
 import random
@@ -55,7 +56,6 @@ def find_top_jobs(user_profile: dict):
         out += f"**{i}. {job['title']}**\n*Dept: {job['dept']}*\n\n"
     return out
 
-# CRITICAL FIX: Removed 'async' to prevent 502 Gateway/Gson errors
 @app.post("/api/chat")
 def chat_endpoint(payload: ChatPayload):
     msg_orig = payload.user_message.strip()
@@ -76,11 +76,32 @@ def chat_endpoint(payload: ChatPayload):
 
     elif step == "get_intro":
         try:
-            model = genai.GenerativeModel('gemini-1.5-flash')
-            response = model.generate_content(f"Extract Name and Dept from: '{msg_orig}'. Return JSON: {{\"name\": \"...\", \"department\": \"...\"}}")
-            data = json.loads(response.text.replace('```json', '').replace('```', '').strip())
-            USER_SESSIONS[email] = {"Email": email, "Name": data["name"], "Department": data["department"]}
-            return {"status": "success", "ai_response": f"Hi {data['name']}! Interest in {data['department']} noted. Qualification?", "next_step": "get_qualification"}
+            # 1. Force Gemini to return STRICT JSON
+            model = genai.GenerativeModel(
+                'gemini-1.5-flash',
+                generation_config={"response_mime_type": "application/json"}
+            )
+            
+            # 2. Give it a clear, explicit prompt
+            prompt = f"""
+            Extract the Name and Department from this user message: '{msg_orig}'.
+            Return ONLY a valid JSON object exactly like this: {{"name": "the_name", "department": "the_department"}}
+            """
+            
+            response = model.generate_content(prompt)
+            data = json.loads(response.text)
+            
+            # Use .get() for safety so it doesn't crash if a field is missing
+            name = data.get("name", "User")
+            department = data.get("department", "Unknown")
+            
+            USER_SESSIONS[email] = {"Email": email, "Name": name, "Department": department}
+            
+            return {
+                "status": "success", 
+                "ai_response": f"Hi {name}! Interest in {department} noted. What is your highest qualification?", 
+                "next_step": "get_qualification"
+            }
         except Exception as e:
             print(f"CRITICAL GEMINI ERROR: {e}")
             return {"status": "error", "ai_response": "Could not parse intro. Please state your Name and Department.", "next_step": "get_intro"}
