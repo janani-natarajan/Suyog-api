@@ -7,15 +7,12 @@ import random
 import csv
 import google.generativeai as genai
 
-# Setup Gemini (Updated to match Render's explicit requirement)
-gemini_key = os.getenv("GOOGLE_API_KEY") 
-if gemini_key:
-    genai.configure(api_key=gemini_key)
-else:
-    print("❌ ERROR: GOOGLE_API_KEY is missing! Check Render Environment tab.")
+# HARDCODED KEY FOR TESTING ONLY
+# Paste your key inside these quotes: "AIza..."
+genai.configure(api_key="AQ.Ab8RN6LO3hENURfFwgPQoNz-V3Q8nHQdYvH_Mlm60PR0Vjp19w")
 
 app = FastAPI()
-OTP_STORE = {}
+# ... (rest of your code remains identical)OTP_STORE = {}
 USER_SESSIONS = {} 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
