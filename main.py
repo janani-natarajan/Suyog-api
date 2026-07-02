@@ -75,14 +75,12 @@ def chat_endpoint(payload: ChatPayload):
 
     elif step == "get_intro":
         try:
-            # 1. Standard text generation (Removes strict JSON configs that crash older SDKs)
             model = genai.GenerativeModel('gemini-1.5-flash')
             prompt = f"Extract Name and Department from this message: '{msg_orig}'. Reply with exactly this format: NAME: [name] | DEPT: [department]"
             
             response = model.generate_content(prompt)
             reply_text = response.text.strip()
             
-            # 2. Simple, crash-proof text extraction
             name = "User"
             department = "Unknown"
             
@@ -99,10 +97,8 @@ def chat_endpoint(payload: ChatPayload):
                 "next_step": "get_qualification"
             }
         except Exception as e:
-            # THIS LINE WILL PRINT THE ABSOLUTE TRUTH TO RENDER LOGS IF IT FAILS
-            print(f"CRITICAL GEMINI ERROR: {e}")
-            return {"status": "error", "ai_response": "Could not parse intro. Please state your Name and Department.", "next_step": "get_intro"}
-
+            # THIS NOW SENDS THE REAL ERROR TO YOUR ANDROID SCREEN
+            return {"status": "error", "ai_response": f"DEBUG ERROR: {str(e)}", "next_step": "get_intro"}
     elif step == "get_qualification":
         if email not in USER_SESSIONS: return {"status": "error", "ai_response": "Session expired.", "next_step": "get_email"}
         USER_SESSIONS[email]["Qualification"] = msg_orig
