@@ -5,11 +5,15 @@ import random
 from email.mime.text import MIMEText
 from fastapi import FastAPI
 from pydantic import BaseModel
-import csv
+import csvfrom google.oauth2 import service_account
 import google.generativeai as genai
 
+# You would typically download a JSON key file from your Google Cloud Console
+# and set the path in your Railway environment variables as GOOGLE_APPLICATION_CREDENTIALS
+# This is the industry-standard way to use those secure AQ/Auth keys.
+
 # Setup Gemini & Email from Railway Environment Variables
-genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
 app = FastAPI()
 OTP_STORE = {}
