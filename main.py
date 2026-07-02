@@ -7,10 +7,12 @@ import random
 import csv
 import google.generativeai as genai
 
-# Setup Gemini
-gemini_key = os.getenv("GEMINI_API_KEY")
+# Setup Gemini (Updated to match Render's explicit requirement)
+gemini_key = os.getenv("GOOGLE_API_KEY") 
 if gemini_key:
     genai.configure(api_key=gemini_key)
+else:
+    print("❌ ERROR: GOOGLE_API_KEY is missing! Check Render Environment tab.")
 
 app = FastAPI()
 OTP_STORE = {}
@@ -76,24 +78,21 @@ def chat_endpoint(payload: ChatPayload):
 
     elif step == "get_intro":
         try:
-            # 1. Force Gemini to return STRICT JSON
-            model = genai.GenerativeModel(
-                'gemini-1.5-flash',
-                generation_config={"response_mime_type": "application/json"}
-            )
-            
-            # 2. Give it a clear, explicit prompt
-            prompt = f"""
-            Extract the Name and Department from this user message: '{msg_orig}'.
-            Return ONLY a valid JSON object exactly like this: {{"name": "the_name", "department": "the_department"}}
-            """
+            # 1. Standard text generation (Removes strict JSON configs that crash older SDKs)
+            model = genai.GenerativeModel('gemini-1.5-flash')
+            prompt = f"Extract Name and Department from this message: '{msg_orig}'. Reply with exactly this format: NAME: [name] | DEPT: [department]"
             
             response = model.generate_content(prompt)
-            data = json.loads(response.text)
+            reply_text = response.text.strip()
             
-            # Use .get() for safety so it doesn't crash if a field is missing
-            name = data.get("name", "User")
-            department = data.get("department", "Unknown")
+            # 2. Simple, crash-proof text extraction
+            name = "User"
+            department = "Unknown"
+            
+            if "NAME:" in reply_text and "|" in reply_text:
+                parts = reply_text.split("|")
+                name = parts[0].replace("NAME:", "").strip()
+                department = parts[1].replace("DEPT:", "").strip()
             
             USER_SESSIONS[email] = {"Email": email, "Name": name, "Department": department}
             
@@ -103,6 +102,7 @@ def chat_endpoint(payload: ChatPayload):
                 "next_step": "get_qualification"
             }
         except Exception as e:
+            # THIS LINE WILL PRINT THE ABSOLUTE TRUTH TO RENDER LOGS IF IT FAILS
             print(f"CRITICAL GEMINI ERROR: {e}")
             return {"status": "error", "ai_response": "Could not parse intro. Please state your Name and Department.", "next_step": "get_intro"}
 
