@@ -5,7 +5,8 @@ import random
 from email.mime.text import MIMEText
 from fastapi import FastAPI
 from pydantic import BaseModel
-import csvfrom google.oauth2 import service_account
+import csvfrom google.oauth2 
+import service_account
 import google.generativeai as genai
 
 # You would typically download a JSON key file from your Google Cloud Console
